@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Data (large, downloaded from Zenodo)
+data/*.h5
+
+# Checkpoints / outputs
+checkpoints/*.pt
+checkpoints/*.json
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
