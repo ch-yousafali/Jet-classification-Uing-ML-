@@ -2,13 +2,17 @@
 
 The Top Quark Tagging Reference Dataset (Kasieczka et al., 2019,
 https://zenodo.org/record/2603256) is distributed as three HDF5 files
-(train.h5, val.h5, test.h5). Each file stores, per jet:
+(train.h5, val.h5, test.h5) in PyTables format. Each row stores, per jet:
 
-  - E, PX, PY, PZ   : (200,) constituent four-momenta (zero-padded)
-  - Eta, Phi        : (200,) constituent pseudorapidity / azimuth
-  - is_signal_new   : (1,) label, 1 = top quark, 0 = QCD background
-  - ttv             : (1,) split flag (redundant across files)
-  - truth{E,PX,PY,PZ}: top-quark four-momentum
+  - values_block_0 : (804,) float32 = the 200 constituent four-momenta
+                     stored interleaved as [E,PX,PY,PZ] per constituent
+                     (800 values) followed by the truth top-quark
+                     four-momentum (4 values, zero for QCD).
+  - values_block_1 : (2,) int64 = [ttv, is_signal_new], where
+                     is_signal_new = 1 is a top quark, 0 is QCD background.
+  - index          : int64 row id.
+
+Eta and Phi are not stored; they are derived from (PX, PY, PZ).
 
 This module turns the list of constituents into a 2D "jet image"
 (eta-phi histogram weighted by pT) which is fed to a CNN, following
@@ -22,8 +26,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Tuple
 
-import h5py
 import numpy as np
+import tables  # PyTables: native reader for the Zenodo HDF5 format
 import torch
 from torch.utils.data import Dataset
 
@@ -63,6 +67,48 @@ def download_split(split: str, data_dir: str) -> str:
 def ensure_splits(data_dir: str, splits=("train", "val", "test")) -> dict:
     """Download all requested splits and return {split: path}."""
     return {s: download_split(s, data_dir) for s in splits}
+
+
+# --------------------------------------------------------------------------- #
+# Raw array loading (PyTables -> numpy four-momenta + labels)
+# --------------------------------------------------------------------------- #
+
+
+def load_split_arrays(
+    path: str, max_events: int | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Read one Zenodo HDF5 split and return per-constituent arrays.
+
+    Returns (E, PX, PY, PZ, Eta, Phi, labels), each of shape (N, 200)
+    except `labels` which is (N,). Constituents are zero-padded to 200.
+    Eta and Phi are computed from (PX, PY, PZ).
+    """
+    with tables.open_file(path) as f:
+        tbl = f.get_node("/table/table")
+        n = tbl.nrows
+        if max_events is not None:
+            n = min(n, max_events)
+        arr = tbl.read(0, n)  # structured array
+
+    vb0 = arr["values_block_0"]  # (N, 804)
+    vb1 = arr["values_block_1"]  # (N, 2) = [ttv, is_signal_new]
+
+    # Interleaved [E, PX, PY, PZ] per constituent -> (N, 200, 4).
+    feat = vb0[:, :800].reshape(n, 200, 4).astype(np.float32)
+    E = feat[..., 0]
+    PX = feat[..., 1]
+    PY = feat[..., 2]
+    PZ = feat[..., 3]
+
+    # Derived kinematics. Guard pT=0 (zero-padded constituents).
+    pt = np.sqrt(np.maximum(PX**2 + PY**2, 0.0))
+    pt_safe = np.where(pt > 0, pt, 1.0)
+    Eta = np.arcsinh(PZ / pt_safe)            # pseudorapidity
+    Eta = np.where(pt > 0, Eta, 0.0)
+    Phi = np.arctan2(PY, PX).astype(np.float32)  # azimuth [-pi, pi]
+
+    labels = vb1[:, 1].astype(np.float32)  # is_signal_new
+    return E, PX, PY, PZ, Eta, Phi, labels
 
 
 # --------------------------------------------------------------------------- #
@@ -159,24 +205,8 @@ class JetImageDataset(Dataset):
         self.cfg = cfg or DatasetConfig()
         path = download_split(split, self.cfg.data_dir)
         print(f"[data] Loading {split} from {path} ...")
-        with h5py.File(path, "r") as f:
-            keys = list(f.keys())
-            n = f["E"].shape[0]
-            if self.cfg.max_events is not None:
-                n = min(n, self.cfg.max_events)
-            sl = slice(0, n)
-            E = f["E"][sl]
-            PX = f["PX"][sl]
-            PY = f["PY"][sl]
-            PZ = f["PZ"][sl]
-            Eta = f["Eta"][sl]
-            Phi = f["Phi"][sl]
-            # Label key is `is_signal_new` in the canonical Zenodo files.
-            if "is_signal_new" in keys:
-                y = f["is_signal_new"][sl]
-            else:
-                # Fallback: some derived versions use a different name.
-                raise KeyError(f"Could not find label key in {keys}")
+        E, PX, PY, PZ, Eta, Phi, y = load_split_arrays(path, self.cfg.max_events)
+        n = E.shape[0]
         print(f"[data] Loaded {n} jets. Building jet images ...")
         self.images = build_jet_images(
             E, PX, PY, PZ, Eta, Phi, img_size=self.cfg.img_size

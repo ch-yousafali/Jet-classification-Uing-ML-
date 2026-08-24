@@ -10,18 +10,30 @@ Dataset (Zenodo 2603256) using a CNN baseline on jet images. PyTorch.
 - No GPU detected; runs on CPU. Code auto-detects CUDA if present.
 
 ## Commands
-- Smoke test (small subset, no full download needed beyond test.h5 used for both splits):
+- Smoke test (downloads train.h5 + val.h5, ~1.4 GB; caps each split to 4000 jets):
   `.venv/bin/python -m src.train --max-events 4000 --epochs 3 --batch-size 256 --splits train val`
-- Full training:
+- Full training (downloads train.h5 + val.h5, ~1.4 GB):
   `.venv/bin/python -m src.train --epochs 20 --batch-size 512`
-- Evaluate on test split:
+- Evaluate on test split (downloads test.h5, ~0.35 GB):
   `.venv/bin/python -m src.evaluate --ckpt checkpoints/cnn_best.pt`
+- Smoke evaluate (no extra download if test.h5 present):
+  `.venv/bin/python -m src.evaluate --ckpt checkpoints/cnn_best.pt --max-events 4000`
 
 ## Dataset
 - HDF5 files from https://zenodo.org/record/2603256 (train.h5, val.h5, test.h5).
-- Keys: E, PX, PY, PZ, Eta, Phi (shape (N, 200)); is_signal_new (label);
-  ttv (split); truth{E,PX,PY,PZ}.
+- Format: PyTables (`tables` package required, not plain h5py). Each row in
+  `/table/table` is a structured array with:
+  - `values_block_0` (804,) float32 = 200 constituent four-momenta stored
+    interleaved `[E, PX, PY, PZ]` (800 values) + truth top-quark 4-vec (4, zero for QCD).
+  - `values_block_1` (2,) int64 = `[ttv, is_signal_new]`; label = index 1 (1 = top, 0 = QCD).
+  - `index` int64 row id.
+- Eta and Phi are NOT stored; computed from (PX, PY, PZ) in `src.data.load_split_arrays`.
 - Downloaded automatically into `data/` by `src.data.download_split`.
+- Sizes: train.h5 ~1.04 GB (1.2M jets), val.h5 ~0.35 GB (400k), test.h5 ~0.35 GB (400k).
+
+## Verified
+- Smoke test passes: 3 epochs / 4000 jets -> val AUC 0.9275, test AUC 0.9248.
+- Full training not yet run (CPU-only; ~20 epochs on 1.2M jets would be slow).
 
 ## Layout
 - `src/data.py` — download + jet-image construction + Dataset

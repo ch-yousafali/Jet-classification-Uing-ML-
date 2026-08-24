@@ -5,6 +5,7 @@ torchvision>=0.15
 # Data handling
 h5py>=3.8
 numpy>=1.24
+tables>=3.8  # native PyTables reader for the Zenodo HDF5 format (blosc-compressed)
 
 # Evaluation / plotting
 scikit-learn>=1.2
