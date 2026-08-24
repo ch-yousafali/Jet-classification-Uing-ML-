@@ -36,7 +36,13 @@ Dataset (Zenodo 2603256) using a CNN baseline on jet images. PyTorch.
 - Full training not yet run (CPU-only; ~20 epochs on 1.2M jets would be slow).
 
 ## Layout
-- `src/data.py` — download + jet-image construction + Dataset
-- `src/model.py` — JetImageCNN
+- `src/data/` — package: `download.py` (Zenodo fetch), `jet_image.py`
+  (raw array loading + jet-image construction), `dataset.py`
+  (JetImageDataset + DatasetConfig). `__init__.py` re-exports public API.
+- `src/model/` — package: `cnn.py` (ConvBlock + JetImageCNN),
+  `build.py` (build_model helper). `__init__.py` re-exports public API.
 - `src/train.py` — training loop with AUC tracking + checkpointing
 - `src/evaluate.py` — test-split evaluation (AUC, accuracy, 1/eps_B @ eps_S=0.3)
+- `tests/` — pytest suite: `test_model.py`, `test_data.py`, `test_train.py`.
+  Run with `.venv/bin/python -m pytest tests/ -v`. Data-dependent tests
+  skip themselves if `data/*.h5` are absent.

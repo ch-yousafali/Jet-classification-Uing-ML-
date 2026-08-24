@@ -13,3 +13,6 @@ matplotlib>=3.7
 
 # Progress
 tqdm>=4.65
+
+# Testing
+pytest>=7.4

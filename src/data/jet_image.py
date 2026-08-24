@@ -1,77 +1,31 @@
-"""Data loading and jet-image construction for the Top Quark Tagging dataset.
+"""Raw array loading and jet-image construction.
 
-The Top Quark Tagging Reference Dataset (Kasieczka et al., 2019,
-https://zenodo.org/record/2603256) is distributed as three HDF5 files
-(train.h5, val.h5, test.h5) in PyTables format. Each row stores, per jet:
+The Zenodo HDF5 files use PyTables (blosc-compressed structured arrays).
+Each row in `/table/table` stores:
 
-  - values_block_0 : (804,) float32 = the 200 constituent four-momenta
-                     stored interleaved as [E,PX,PY,PZ] per constituent
+  - values_block_0 : (804,) float32 = 200 constituent four-momenta stored
+                     interleaved as [E, PX, PY, PZ] per constituent
                      (800 values) followed by the truth top-quark
                      four-momentum (4 values, zero for QCD).
-  - values_block_1 : (2,) int64 = [ttv, is_signal_new], where
-                     is_signal_new = 1 is a top quark, 0 is QCD background.
+  - values_block_1 : (2,) int64 = [ttv, is_signal_new]; label = index 1
+                     (1 = top quark, 0 = QCD background).
   - index          : int64 row id.
 
 Eta and Phi are not stored; they are derived from (PX, PY, PZ).
 
-This module turns the list of constituents into a 2D "jet image"
-(eta-phi histogram weighted by pT) which is fed to a CNN, following
-the image-based approach described in the README (Approach 1 / DeepTop).
+Constituents are turned into a 2D "jet image" (pT-weighted eta-phi
+histogram) following the image-based approach in the README
+(Approach 1 / DeepTop).
 """
 
 from __future__ import annotations
 
-import os
-import urllib.request
-from dataclasses import dataclass
-from typing import Tuple
-
 import numpy as np
 import tables  # PyTables: native reader for the Zenodo HDF5 format
-import torch
-from torch.utils.data import Dataset
-
-# Zenodo download URLs for the three splits.
-ZENODO_BASE = "https://zenodo.org/record/2603256/files"
-SPLIT_URLS = {
-    "train": f"{ZENODO_BASE}/train.h5",
-    "val": f"{ZENODO_BASE}/val.h5",
-    "test": f"{ZENODO_BASE}/test.h5",
-}
 
 # Image grid parameters. Anti-kT R=0.8 jets fit within |eta_rel|, |phi_rel| < 0.8.
 IMG_SIZE = 40
 IMG_RANGE = 0.8  # half-width of the eta-phi window in radians
-
-
-def download_split(split: str, data_dir: str) -> str:
-    """Download one split's HDF5 file from Zenodo if not already present.
-
-    Returns the local path to the file. `split` must be one of
-    train/val/test.
-    """
-    if split not in SPLIT_URLS:
-        raise ValueError(f"Unknown split {split!r}; expected one of {list(SPLIT_URLS)}")
-    os.makedirs(data_dir, exist_ok=True)
-    dest = os.path.join(data_dir, f"{split}.h5")
-    if os.path.exists(dest):
-        print(f"[data] {dest} already exists, skipping download.")
-        return dest
-    url = SPLIT_URLS[split]
-    print(f"[data] Downloading {split} from {url} -> {dest}")
-    urllib.request.urlretrieve(url, dest)
-    print(f"[data] Done ({os.path.getsize(dest) / 1e9:.2f} GB).")
-    return dest
-
-
-def ensure_splits(data_dir: str, splits=("train", "val", "test")) -> dict:
-    """Download all requested splits and return {split: path}."""
-    return {s: download_split(s, data_dir) for s in splits}
-
-
-# --------------------------------------------------------------------------- #
-# Raw array loading (PyTables -> numpy four-momenta + labels)
-# --------------------------------------------------------------------------- #
 
 
 def load_split_arrays(
@@ -109,11 +63,6 @@ def load_split_arrays(
 
     labels = vb1[:, 1].astype(np.float32)  # is_signal_new
     return E, PX, PY, PZ, Eta, Phi, labels
-
-
-# --------------------------------------------------------------------------- #
-# Jet-image construction
-# --------------------------------------------------------------------------- #
 
 
 def _delta_phi(phi1: np.ndarray, phi2: np.ndarray) -> np.ndarray:
@@ -177,48 +126,3 @@ def build_jet_images(
     std = np.where(std > 1e-6, std, 1.0)
     images = (images - mean) / std
     return images[:, None, :, :].astype(np.float32)
-
-
-# --------------------------------------------------------------------------- #
-# Dataset
-# --------------------------------------------------------------------------- #
-
-
-@dataclass
-class DatasetConfig:
-    data_dir: str = "data"
-    img_size: int = IMG_SIZE
-    max_events: int | None = None  # cap number of jets loaded (for smoke tests)
-
-
-class JetImageDataset(Dataset):
-    """PyTorch dataset that yields (jet_image, label) tensors.
-
-    Jet images are built once from the constituent four-momenta and cached
-    in memory. For the full 1.2M-event training set this needs ~1.2M * 40*40*4
-    bytes ~= 7.7 GB of RAM; if that is too large, set `max_events` or move
-    caching to disk (see notes in README).
-    """
-
-    def __init__(self, split: str, cfg: DatasetConfig | None = None):
-        self.split = split
-        self.cfg = cfg or DatasetConfig()
-        path = download_split(split, self.cfg.data_dir)
-        print(f"[data] Loading {split} from {path} ...")
-        E, PX, PY, PZ, Eta, Phi, y = load_split_arrays(path, self.cfg.max_events)
-        n = E.shape[0]
-        print(f"[data] Loaded {n} jets. Building jet images ...")
-        self.images = build_jet_images(
-            E, PX, PY, PZ, Eta, Phi, img_size=self.cfg.img_size
-        )
-        self.labels = np.asarray(y, dtype=np.float32).reshape(-1)
-        pos = int(self.labels.sum())
-        print(f"[data] {self.split}: {pos} top / {n - pos} qcd")
-
-    def __len__(self) -> int:
-        return len(self.labels)
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        x = torch.from_numpy(self.images[idx])
-        y = torch.tensor(self.labels[idx])
-        return x, y
