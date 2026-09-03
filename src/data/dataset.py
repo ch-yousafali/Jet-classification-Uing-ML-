@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -40,7 +41,10 @@ class JetImageDataset(Dataset):
         self.images = build_jet_images(
             E, PX, PY, PZ, Eta, Phi, img_size=self.cfg.img_size
         )
+        # Keep labels (tiny), free the large constituent arrays.
         self.labels = np.asarray(y, dtype=np.float32).reshape(-1)
+        del E, PX, PY, PZ, Eta, Phi, y
+        gc.collect()
         pos = int(self.labels.sum())
         print(f"[data] {self.split}: {pos} top / {n - pos} qcd")
 

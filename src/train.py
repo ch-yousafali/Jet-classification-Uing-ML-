@@ -77,6 +77,12 @@ def main():
         help="Cap jets per split (smoke test). None = full dataset.",
     )
     parser.add_argument(
+        "--max-val-events",
+        type=int,
+        default=None,
+        help="Cap val/test jets separately. Falls back to --max-events if unset.",
+    )
+    parser.add_argument(
         "--splits",
         nargs="+",
         default=["train", "val"],
@@ -97,9 +103,13 @@ def main():
     # Download requested splits.
     ensure_splits(args.data_dir, splits=args.splits)
     cfg = DatasetConfig(data_dir=args.data_dir, img_size=args.img_size, max_events=args.max_events)
+    val_cfg = DatasetConfig(
+        data_dir=args.data_dir, img_size=args.img_size,
+        max_events=args.max_val_events if args.max_val_events is not None else args.max_events,
+    )
 
     train_ds = JetImageDataset("train", cfg)
-    val_ds = JetImageDataset("val", cfg)
+    val_ds = JetImageDataset("val", val_cfg)
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, drop_last=False,

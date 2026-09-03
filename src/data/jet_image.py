@@ -20,6 +20,8 @@ histogram) following the image-based approach in the README
 
 from __future__ import annotations
 
+import gc
+
 import numpy as np
 import tables  # PyTables: native reader for the Zenodo HDF5 format
 
@@ -46,9 +48,14 @@ def load_split_arrays(
 
     vb0 = arr["values_block_0"]  # (N, 804)
     vb1 = arr["values_block_1"]  # (N, 2) = [ttv, is_signal_new]
+    labels = vb1[:, 1].astype(np.float32)  # is_signal_new
 
     # Interleaved [E, PX, PY, PZ] per constituent -> (N, 200, 4).
     feat = vb0[:, :800].reshape(n, 200, 4).astype(np.float32)
+    # Free the raw structured array early to save ~1.3 GB for 400k jets.
+    del arr, vb0, vb1
+    gc.collect()
+
     E = feat[..., 0]
     PX = feat[..., 1]
     PY = feat[..., 2]
@@ -58,10 +65,9 @@ def load_split_arrays(
     pt = np.sqrt(np.maximum(PX**2 + PY**2, 0.0))
     pt_safe = np.where(pt > 0, pt, 1.0)
     Eta = np.arcsinh(PZ / pt_safe)            # pseudorapidity
-    Eta = np.where(pt > 0, Eta, 0.0)
+    Eta = np.where(pt > 0, Eta, 0.0).astype(np.float32)
     Phi = np.arctan2(PY, PX).astype(np.float32)  # azimuth [-pi, pi]
 
-    labels = vb1[:, 1].astype(np.float32)  # is_signal_new
     return E, PX, PY, PZ, Eta, Phi, labels
 
 
@@ -80,6 +86,7 @@ def build_jet_images(
     Phi: np.ndarray,
     img_size: int = IMG_SIZE,
     img_range: float = IMG_RANGE,
+    chunk_size: int = 50000,
 ) -> np.ndarray:
     """Convert constituent four-momenta into pT-weighted eta-phi images.
 
@@ -89,9 +96,14 @@ def build_jet_images(
     [-img_range, img_range] in (eta_rel, phi_rel). Pixel value = sum of pT
     of constituents falling in that bin.
 
+    Processing is done in chunks of `chunk_size` jets to keep peak memory
+    low — each chunk's bincount only needs chunk_size * pixel_area entries.
+
     Returns a float32 array of shape (N, 1, img_size, img_size).
     """
     N = E.shape[0]
+    pixel_area = img_size * img_size
+
     # pT of each constituent; zero-padded entries have E=0 -> pT=0.
     pt = np.sqrt(np.maximum(PX**2 + PY**2, 0.0))  # (N, 200)
 
@@ -105,19 +117,50 @@ def build_jet_images(
     eta_rel = Eta - jet_eta  # (N, 200)
     phi_rel = _delta_phi(Phi, jet_phi)
 
-    # Bin indices in [0, img_size).
+    # Free inputs that are no longer needed to reduce peak memory.
+    del E, PX, PY, PZ, Eta, Phi, pt_sum, pt_sum_safe, jet_eta, jet_phi
+    gc.collect()
+
+    # Bin indices in [0, img_size). Use int32 to save memory vs int64.
     bins = np.linspace(-img_range, img_range, img_size + 1)
     ix = np.digitize(eta_rel, bins) - 1  # (N, 200)
     iy = np.digitize(phi_rel, bins) - 1
-    ix = np.clip(ix, 0, img_size - 1)
-    iy = np.clip(iy, 0, img_size - 1)
+    ix = np.clip(ix, 0, img_size - 1).astype(np.int32)
+    iy = np.clip(iy, 0, img_size - 1).astype(np.int32)
 
+    del eta_rel, phi_rel, bins
+    gc.collect()
+
+    # Pre-allocate the output image array.
     images = np.zeros((N, img_size, img_size), dtype=np.float32)
-    # Use np.add.at for scatter-add of pT into the image grid.
-    flat_idx = ix * img_size + iy  # (N, 200)
-    # Flatten over constituents and scatter per-event.
-    for n in range(N):
-        np.add.at(images[n].ravel(), flat_idx[n], pt[n])
+
+    # Process in chunks: for each chunk, use np.bincount on the chunk's
+    # flattened indices (offset within the chunk) to scatter-add pT values
+    # into the image grid. This avoids creating a single giant bincount
+    # array of size N * pixel_area.
+    for start in range(0, N, chunk_size):
+        end = min(start + chunk_size, N)
+        cs = end - start  # chunk size
+        ix_c = ix[start:end]  # (cs, 200)
+        iy_c = iy[start:end]
+        pt_c = pt[start:end]  # (cs, 200)
+
+        # Flat pixel index within each event: ix * img_size + iy
+        # Then offset by event index within chunk * pixel_area
+        flat_idx = (
+            ix_c.astype(np.int64) * img_size + iy_c.astype(np.int64)
+            + (np.arange(cs, dtype=np.int64) * pixel_area).reshape(cs, 1)
+        ).ravel()
+        pt_flat = pt_c.ravel()
+
+        chunk_images = np.bincount(flat_idx, weights=pt_flat, minlength=cs * pixel_area)
+        images[start:end] = chunk_images.astype(np.float32).reshape(cs, img_size, img_size)
+
+        del ix_c, iy_c, pt_c, flat_idx, pt_flat, chunk_images
+
+    del ix, iy, pt
+    gc.collect()
+
     # Log-compress and standardize per-image (mean 0, std 1), common in
     # jet-image literature. Keep a channel dim for the CNN.
     images = np.log1p(images)
