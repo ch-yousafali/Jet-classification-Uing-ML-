@@ -98,19 +98,28 @@ What is covered:
 
 ## Current status
 
-The CNN baseline pipeline runs end-to-end. On a small smoke subset
-(4000 jets per split, 3 epochs, CPU only) it reaches:
+The CNN baseline pipeline runs end-to-end. Results from two runs:
 
-- Validation AUC: **0.9275**
-- Test AUC: **0.9248**
+**100k-jet training run (20 epochs, CPU only):**
+
+- Validation AUC: **0.9731** (best, epoch 8)
+- Test AUC: **0.9725**
+- Test accuracy: **0.9152**
+- Background rejection 1/ε_B at ε_S = 0.3: **410**
+
+**4k-jet smoke test (3 epochs, CPU only):**
+
+- Validation AUC: **0.9274**
+- Test AUC: **0.9247**
 - Background rejection 1/ε_B at ε_S = 0.3: **~41**
 
-These numbers are well below the published P-CNN AUC of 0.9803 (see
-[docs/THESIS.md](docs/THESIS.md), Section 4) because the smoke run uses
-only ~0.3% of the training set and three epochs. A full training run on
-the 1.2M-event training set is the next step to get a comparable number;
-on this CPU-only machine that run is slow, so it has not been completed
-yet.
+The 100k run uses 8.3% of the 1.2M training set. The published P-CNN AUC
+is 0.9803 and ParticleNet is 0.9858 (both on the full 1.2M training set).
+A full training run on the 1.2M-event training set is the next step to
+get a directly comparable number; on this CPU-only machine (16 GB RAM,
+no GPU) that run has not been completed yet. See
+[comparison_results.md](comparison_results.md) for the full comparison
+table.
 
 ## Next steps
 

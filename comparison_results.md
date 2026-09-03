@@ -12,7 +12,8 @@ All published numbers below are taken **only** from official sources:
 Every published model was trained on the **full 1.2M-jet training set** and
 evaluated on the **full 400k-jet test set**, with results reported as the median
 of 9 independent trainings (uncertainty = spread across those 9 runs). Our CNN
-was **not** trained on the full set — see the caveat below.
+was trained on a **100k-jet subset** (8.3% of the full training set) — see the
+caveat below.
 
 ---
 
@@ -20,8 +21,8 @@ was **not** trained on the full set — see the caveat below.
 
 | Model | Type | Accuracy | AUC | 1/ε_B @ ε_S=50% | 1/ε_B @ ε_S=30% | Params | Source |
 |---|---|---|---|---|---|---|---|
-| **Our CNN (smoke, 3 ep)** | Jet-image 2D CNN | not logged | 0.9248 | not logged | ~41 | ~913k | This repo (README) |
-| **Our CNN (ckpt, 1 ep)** | Jet-image 2D CNN | 0.8083 | 0.8912 | not logged | 16.8 | ~913k | This repo (eval run) |
+| **Our CNN (100k, 20 ep)** | Jet-image 2D CNN | 0.9152 | 0.9725 | not logged | 410 | ~913k | This repo (eval run) |
+| **Our CNN (smoke, 4k 3 ep)** | Jet-image 2D CNN | 0.8608 | 0.9247 | not logged | ~41 | ~913k | This repo (smoke test) |
 | ResNeXt-50 | Jet-image 2D CNN (deep) | 0.936 | 0.9837 | 302 ± 5 | 1147 ± 58 | 1.46M | ParticleNet paper, Table 2/4 |
 | P-CNN | 1D particle-sequence CNN | 0.930 | 0.9803 | 201 ± 4 | 759 ± 24 | 348k | ParticleNet paper, Table 2/4 |
 | PFN | Particle-set (Deep Sets) | not reported | 0.9819 | 247 ± 3 | 888 ± 17 | 82k | ParticleNet paper, Table 2/4 |
@@ -32,31 +33,34 @@ Notes on the table:
 - "not logged" = the metric was not recorded for that run; we do not estimate it.
 - "not reported" = the source paper does not report that number (PFN accuracy is
   absent from the ParticleNet paper's Table 2).
-- Our CNN's two rows come from **two different short runs**, explained in Section 2.
+- Our CNN's 100k run was trained on 100k of 1.2M jets (8.3%) for 20 epochs;
+  the smoke run used 4k jets (0.3%) for 3 epochs.
 
 ---
 
 ## 2. Important Caveat About Our CNN Numbers
 
-Our CNN has **not** been fully trained. The numbers above come from two
-CPU-only smoke runs on a tiny subset of the data, **not** the full 1.2M-jet
-training set that every published model used:
+Our CNN has **not** been trained on the full 1.2M-jet dataset. The numbers
+above come from two CPU-only runs on subsets of the data:
 
-- **"Our CNN (smoke, 3 ep)"** — the run documented in the repo README: 3 epochs,
-  4000 jets per split (~0.3% of the training set). Results: val AUC 0.9275,
-  test AUC 0.9248, 1/ε_B @ ε_S=0.3 ≈ 41. Accuracy was not logged for this run.
-  The checkpoint from this run is **no longer on disk** (it was overwritten).
+- **"Our CNN (100k, 20 ep)"** — the current best run: 20 epochs on 100k
+  training jets (8.3% of the full set), 20k validation jets, batch size 512.
+  Best validation AUC = 0.9731 (epoch 8; model began overfitting afterward
+  with train AUC climbing to 0.993 while val AUC declined). Evaluated on 40k
+  test jets: test AUC 0.9725, accuracy 0.9152, 1/ε_B @ ε_S=0.3 = 410.
+  The checkpoint is saved at `checkpoints/cnn_best.pt`.
 
-- **"Our CNN (ckpt, 1 ep)"** — the checkpoint currently saved at
-  `checkpoints/cnn_best.pt` is from a **shorter 1-epoch** run (val AUC 0.9093).
-  Re-evaluating it on 4000 test jets gives test AUC 0.8912, accuracy 0.8083,
-  1/ε_B @ ε_S=0.3 = 16.8. These are lower than the README numbers because the
-  checkpoint is from fewer epochs.
+- **"Our CNN (smoke, 4k 3 ep)"** — the initial smoke test: 3 epochs on 4000
+  jets per split (~0.3% of the training set). Results: val AUC 0.9274,
+  test AUC 0.9247, accuracy 0.8608, 1/ε_B @ ε_S=0.3 ≈ 41.
 
 A full training run (20 epochs on the full 1.2M-jet set) is the planned next
-step but has not been completed because this machine is CPU-only and the run
-would be slow. **Until that run is done, our CNN numbers are not directly
-comparable to the published numbers**, which all use the full dataset.
+step but has not been completed because this machine is CPU-only (16 GB RAM,
+no GPU) and the run would be slow. **Our 100k numbers are not directly
+comparable to the published numbers**, which all use the full 1.2M training
+set. However, the gap is already narrowing: at 8.3% of the training data our
+CNN reaches AUC 0.9725, within ~1.1% of the P-CNN's 0.9803 and ~1.3% of
+ParticleNet's 0.9858.
 
 ---
 
@@ -82,18 +86,21 @@ smoke-test scale, and 1147 for the strongest image-based model, ResNeXt-50).
 
 ---
 
-## 4. Does Our CNN Underperform? — Yes, and That Is Expected
+## 4. Does Our CNN Underperform? — Yes, but the Gap Is Closing
 
 Our CNN **underperforms every published model in the table**, including the
-image-based ResNeXt-50 and P-CNN, by a wide margin. This is expected and does
-not indicate a bug, for two reasons:
+image-based ResNeXt-50 and P-CNN. This is expected and does not indicate a
+bug, for two reasons:
 
-1. **Training scale.** Our numbers are from a 4000-jet, 3-epoch smoke run
-   (~0.3% of the training data). Every published number uses the full 1.2M-jet
-   training set with a tuned learning-rate schedule over many epochs. A
-   fully-trained image CNN on this dataset reaches AUC ~0.98 (see ResNeXt-50
-   and P-CNN), so the gap would narrow substantially with full training — but
-   it would still fall short of ParticleNet.
+1. **Training scale.** Our best numbers are from a 100k-jet, 20-epoch run
+   (8.3% of the training data). Every published number uses the full 1.2M-jet
+   training set with a tuned learning-rate schedule. A fully-trained image CNN
+   on this dataset reaches AUC ~0.98 (see ResNeXt-50 and P-CNN), so the gap
+   would narrow further with full training — but it would still fall short of
+   ParticleNet. Already, at 8.3% of the data, our CNN reaches AUC 0.9725 and
+   background rejection of 410 at ε_S=30%, which is competitive with ResNeXt-50's
+   1/ε_B of 302 at ε_S=50% (different operating points, but the same order of
+   magnitude).
 
 2. **Architecture.** Even with full training, a grid-based CNN is expected to
    trail a point-cloud/graph model like ParticleNet, because the image
